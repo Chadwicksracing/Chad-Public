@@ -16,13 +16,17 @@
 .PARAMETER Credidential
     Supports PS Credential Objects
 .NOTES
-  Version:          1.0
+  Version:          1.1.0
   Author:           Adam Gross - @AdamGrossTX
+  Co-Author:        Chad Brower @brower_chad
   GitHub:           https://www.github.com/AdamGrossTX
   WebSite:          https://www.asquaredozen.com
   Creation Date:    08/08/2019
-  Purpose/Change:   Initial script development
-  
+  Last Edit Date:   02/20/2020
+  Version history:  1.0.0 - Initial script development
+                    1.1.0 - Changed to WMI instead of CIM, due to -Creds, may not be the best way..
+  #TODO: Test Pipeline, and multiple computer objects
+  #TODO: Change back to CIM if we can figure out how to use creds object
  #>
 Function Invoke-FISCCMDCMEvaluation {
     [CmdletBinding(SupportsShouldProcess=$True)]
