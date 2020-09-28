@@ -36,9 +36,11 @@
      Author:     Chad Brower
      Contact:    @Brower_Chad
      Created:    2020.09.23
-     Version:    1.0.0
+     Version:    1.0.1
 
      1.0.0 - First release, tested under system context.  Unknown how it will handle multiple users logged in, not sure if this a scenerio I need to worry about
+     1.0.1 - Minor changes to output for CI handling.  CI did not like transcript output.  Got splatting working for New-ScheduledTaskSettingsSet
+     making it easier for user of this script to make changes for their org. 
 
      Other Notes:  You can edit anything about the script to fit your org needs:
  #>
@@ -65,7 +67,7 @@
     [Parameter()]
     [string] $TranscriptPath = "$env:windir\CCM\Logs\FeatureUpdate-ToastNotifcation.log"
 )
-Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyContinue
+Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyContinue | Out-Null
 #Region Begin Build Variables
     $ScheduleObject = New-Object -ComObject Schedule.Service
     $ScheduleObject.Connect()
@@ -105,19 +107,19 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
         Return $Results
     }
     if($Remediate) {
-        # Splat trigger param settings
+        # Splatting trigger param settings
         $TriggerSplatt = @{
             Daily = $true
             At = (Get-Date 09:00AM)
         }
-        # It doesn't appear that splatting is NOT supported for the New-ScheduledTaskSettingsSet commandlet
-        # $SetSettingsSplatt = @{
-        #     WakeToRun = $true
-        #     AllowStartIfOnBatteries = $true
-        #     DontStopIfGoingOnBatteries = $true
-        #     ExecutionTimeLimit = (New-TimeSpan -Hours 1)
-        #     StartWhenAvailable = $true
-        # }
+        # Splatting for the New-ScheduledTaskSettingsSet commandlet
+        $SetSettingsSplatt = @{
+             WakeToRun = $true
+             AllowStartIfOnBatteries = $true
+             DontStopIfGoingOnBatteries = $true
+             ExecutionTimeLimit = (New-TimeSpan -Hours 1)
+             StartWhenAvailable = $true
+        }
     }
 #EndRegion
 #Region Main Discovery
@@ -179,7 +181,7 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
         }
         else {
             # $Compliance # For Testing
-            Write-Warning "Compliance Issue: $($Error[0].Exception.Message)"
+            Write-Information "Compliance Issue: $($Error[0].Exception.Message)" | Out-Null
             Write-Host "Non-Compliant"
         }
     }
@@ -214,8 +216,7 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
                 ########################## EDIT ME IF NEEDED ######################
                 $Trigger = New-ScheduledTaskTrigger @TriggerSplatt # Edit this if needed - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasktrigger?view=win10-ps
                 $Principal = New-ScheduledTaskPrincipal "$($UserDomain)\$($GetUserName.UserName)" # Edit this to match your needs - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal?view=win10-ps
-                $SetSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries`
-                 -DontStopIfGoingOnBatteries -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 1)  # Add anything here you need - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset?view=win10-ps
+                $SetSettings = New-ScheduledTaskSettingsSet @SetSettingsSplatt # Add anything here you need - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset?view=win10-ps
                 ###################################################################
                 $InputObj = New-ScheduledTask -Action $Action -Principal $Principal -Trigger $Trigger -Settings $SetSettings -Description $SchTDes # Edit if you need - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtask?view=win10-ps
                 # After building task bits, we need to register it
@@ -244,4 +245,4 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
             }
         }
 #EndRegion
-Stop-Transcript
+Stop-Transcript | Out-Null
