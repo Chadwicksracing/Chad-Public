@@ -36,18 +36,20 @@
      Author:     Chad Brower
      Contact:    @Brower_Chad
      Created:    2020.09.23
-     Version:    1.0.1
+     Edited:     2020.09.30
+     Version:    1.1.0
 
      1.0.0 - First release, tested under system context.  Unknown how it will handle multiple users logged in, not sure if this a scenerio I need to worry about
      1.0.1 - Minor changes to output for CI handling.  CI did not like transcript output.  Got splatting working for New-ScheduledTaskSettingsSet
-     making it easier for user of this script to make changes for their org. 
+     making it easier for user of this script to make changes for their org
+     1.1.0 - Major changes to handling. [string] $SchTActionProgram = "C:\Windows\System32\wscript.exe", # This will not work correctly. So I had to hard code it in the splatt
 
      Other Notes:  You can edit anything about the script to fit your org needs:
  #>
  [cmdletbinding()]
  Param (
     [Parameter()]
-    [string] $SchTActionScript = "wscript.exe", # Program to run
+    [string] $SchTActionProgram = "C:\Windows\System32\wscript.exe", # Program to run
     [Parameter()]
     [string] $SchTActionArgs = 'Hidden.vbs RunToastHidden.cmd', # Arguments 
     [Parameter()]    
@@ -57,13 +59,13 @@
     [Parameter()]
     [string] $SchTDes = "1909", # WaaS Update
     [Parameter()]
-    [string] $SchTWrkPath = "C:\~FeatureUpdateTemp\ToastNotificationScript", # Working path
+    [string] $SchTWrkPath = "C:\~FeatureUpdateTemp\Scripts\ToastNotificationScript", # Working path
     [Parameter()]
-    [String] $UserDomain = "CONTOSO", # Your domain alias
+    [String] $UserDomain = "FIC", # Your domain alias
     [Parameter()]
-    [switch] $Remediate,
+    [Switch] $Remediate = $true, # Use to add task
     [Parameter()]
-    [switch] $RemoveOnly,
+    [switch] $RemoveOnly, # want to remove it all?
     [Parameter()]
     [string] $TranscriptPath = "$env:windir\CCM\Logs\FeatureUpdate-ToastNotifcation.log"
 )
@@ -82,12 +84,14 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
             }
         }
     )
+    # Get current user logged in
     # Modified from here: https://community.spiceworks.com/scripts/show/4408-get-logged-in-users-remote-computers-or-local
     $GetCurrentUser = {
         $QueryUsers = quser /server:$($env:COMPUTERNAME) 2>$null
         [PSCustomObject]$PSObj = @()
           If (!$QueryUsers) {
             Write-Error "Unable to retrieve quser info for $($env:COMPUTERNAME)" -ea Stop
+            Stop-Transcript | Out-Null
             Exit 1
           }
         ForEach ($Line in $QueryUsers) {
@@ -106,8 +110,27 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
         }
         Return $Results
     }
-    if($Remediate) {
-        # Splatting trigger param settings
+    # Building block for the Removal part
+    $RemoveBit = {
+        # Remove Task & Folder in Task Scheduler
+        try {
+            Unregister-ScheduledTask -TaskName $GetSchT.TaskName -Confirm:$false
+            $GetSchTFolders.DeleteFolder($SchTFolder,$null)
+            Write-Host "Task & Folder Removed"
+        }
+        catch [System.Exception] {
+            $_
+            Stop-Transcript | Out-Null
+            Exit 1 
+        }
+    }
+    # Building block for Creating the task
+    # See https://docs.microsoft.com/en-us/powershell/module/scheduledtasks to help build out your task the way you need
+    $CreateTaskBit = {
+        Write-Host "Action: $SchTActionProgram"
+        Write-Host "ActionArgs:  $SchTActionArgs"
+        Write-Host "WorkDir: $SchTWrkPath"
+        # Splat trigger param settings
         $TriggerSplatt = @{
             Daily = $true
             At = (Get-Date 09:00AM)
@@ -120,10 +143,26 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
              ExecutionTimeLimit = (New-TimeSpan -Hours 1)
              StartWhenAvailable = $true
         }
+        # Splatt actions
+        # had to hard code Execute, the CI handler kept changing its value to "Compliant or Non-Comliant"
+        $ActionSplatt = @{
+            Execute = "C:\Windows\System32\wscript.exe"
+            Argument = $SchTActionArgs
+            WorkingDirectory = $SchTWrkPath
+        }
+        # Setup Toast Notification
+        $Action = New-ScheduledTaskAction @ActionSplatt
+        $Trigger = New-ScheduledTaskTrigger @TriggerSplatt
+        $Principal = New-ScheduledTaskPrincipal "$($UserDomain)\$($GetUserName.UserName)"
+        $SetSettings = New-ScheduledTaskSettingsSet @SetSettingsSplatt
+        $InputObj = New-ScheduledTask -Action $Action -Principal $Principal -Trigger $Trigger -Settings $SetSettings -Description $SchTDes
+        # After building task bits, we need to register it
+        Register-ScheduledTask -TaskName $SchTName -InputObject $InputObj -TaskPath $SchTFolder
+        Write-Host "Task Created"  
     }
 #EndRegion
 #Region Main Discovery
-    if ((!$PSBoundParameters.ContainsKey('Remediate')) -AND (!$PSBoundParameters.ContainsKey('RemoveOnly'))) {
+    if (-NOT(($Remediate.IsPresent) -OR ($RemoveOnly.IsPresent))) {
         $Compliance = $null
         while ($null -eq $Compliance -or !($Compliance -eq "Error") -or !($Compliance -eq "3")) {
             # Does the Folder Exist    
@@ -136,8 +175,7 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
                 }
             }
             catch [System.Exception] {
-                $Compliance = "Error"
-                #Write-Error "$_" -ea Continue
+                [String]$Compliance = "Error"
                 Break
             }
             # Does the Task Exist
@@ -150,8 +188,7 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
                 }
             }
             catch [System.Exception] {
-                $Compliance = "Error"
-                #Write-Error "$_" -ea Continue
+                [String]$Compliance = "Error"
                 Break
             }
             # Does the Task Make the Description? 1909.ect
@@ -169,7 +206,7 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
                 }
             }
             catch [System.Exception] {
-                $Compliance = "Error"
+                [String]$Compliance = "Error"
                 Break
             }
             Break
@@ -177,24 +214,29 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
         # Write Compliance for CI Discovery
         if ($Compliance -eq "3") {
             # $Compliance # For Testing
-            Write-Host "Compliant"
+            $ComplianceValue = "Compliant"
+            Write-Information "Compliant" | Out-Null
+            Return $ComplianceValue
         }
         else {
             # $Compliance # For Testing
+            $ComplianceValue = "Non-Compliant"
+            Write-Information "Non-Compliant" | Out-Null
             Write-Information "Compliance Issue: $($Error[0].Exception.Message)" | Out-Null
-            Write-Host "Non-Compliant"
+            Return $ComplianceValue
         }
     }
 #EndRegion
 #Region Main Remediate
-    elseif ($Remediate) {
+    if ($Remediate.IsPresent) {
         # Get the current logged on user
-        $GetUserName = &$GetCurrentUser
+        $GetUserName = & $GetCurrentUser
         # Create a New Folder in Task Scheduler
         if (!($ArrayFolders.path -eq "\$($SchTFolder)")) {
             # Create the folder
             try {
                 $GetSchTFolders.CreateFolder($SchTFolder)
+                Write-Host "Folder Created"
             }
             catch [System.Exception] {
                 if($_.Exception.Message -like "*Cannot create a file when that file already exists*") {
@@ -202,6 +244,7 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
                 }
                 else { 
                 $_
+                Stop-Transcript | Out-Null
                 Exit 1
                 }
             }
@@ -211,16 +254,15 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
         }
         try {
             if ($null -eq $GetSchT) {
-                # Setup Toast Notification
-                $Action = New-ScheduledTaskAction -Execute $SchTActionScript -Argument $SchTActionArgs -WorkingDirectory $SchTWrkPath
-                ########################## EDIT ME IF NEEDED ######################
-                $Trigger = New-ScheduledTaskTrigger @TriggerSplatt # Edit this if needed - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasktrigger?view=win10-ps
-                $Principal = New-ScheduledTaskPrincipal "$($UserDomain)\$($GetUserName.UserName)" # Edit this to match your needs - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal?view=win10-ps
-                $SetSettings = New-ScheduledTaskSettingsSet @SetSettingsSplatt # Add anything here you need - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset?view=win10-ps
-                ###################################################################
-                $InputObj = New-ScheduledTask -Action $Action -Principal $Principal -Trigger $Trigger -Settings $SetSettings -Description $SchTDes # Edit if you need - https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtask?view=win10-ps
-                # After building task bits, we need to register it
-                Register-ScheduledTask -TaskName $SchTName -InputObject $InputObj -TaskPath $SchTFolder
+                & $CreateTaskBit
+            }
+            elseif ($GetSchT.Description -notmatch $SchTDes) {
+                Write-Host "The task description did not match Parameters in script."
+                Write-Warning "Removing Task and Folder.."
+                & $RemoveBit
+                $GetSchTFolders.CreateFolder($SchTFolder)
+                Write-Host "Folder Created"
+                & $CreateTaskBit
             }
             else {
                 Write-Host "Task Already exists"
@@ -228,21 +270,14 @@ Start-Transcript -Path $TranscriptPath -Append -Force -ErrorAction SilentlyConti
         }
         catch [System.Exception] {
             $_
+            Stop-Transcript | Out-Null
             Exit 1
         }
     }
 #EndRegion
 #Region Remove
-    elseif ($RemoveOnly) {
-            # Remove Task & Folder in Task Scheduler
-            try {
-                Unregister-ScheduledTask -TaskName $GetSchT.TaskName -Confirm:$false
-                $GetSchTFolders.DeleteFolder($SchTFolder,$null)
-            }
-            catch [System.Exception] {
-                $_
-                Exit 1 
-            }
-        }
+if ($RemoveOnly.IsPresent) {
+    & $RemoveBit
+}
 #EndRegion
 Stop-Transcript | Out-Null
