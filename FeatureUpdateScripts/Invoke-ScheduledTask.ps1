@@ -61,7 +61,7 @@
     [Parameter()]
     [string] $SchTWrkPath = "C:\~FeatureUpdateTemp\Scripts\ToastNotificationScript", # Working path
     [Parameter()]
-    [String] $UserDomain = "FIC", # Your domain alias
+    [String] $UserDomain = "CONTOSO", # Your domain alias
     [Parameter()]
     [Switch] $Remediate = $true, # Use to add task
     [Parameter()]
